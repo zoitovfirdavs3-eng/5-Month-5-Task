@@ -2,12 +2,15 @@ const { globalError, ClientError } = require("shokhijakhon-error-handler");
 const {
   registerValidator,
   profileVerifiedValidator,
-  resendOtpValidator,
+  resendOtpOrForgotPasswordValidator,
+  changePasswordValidator,
+  loginValidator,
 } = require("../utils/validator/auth.validator");
 const UserModel = require("../models/User.model");
-const { hash } = require("bcrypt");
+const { hash, compare } = require("bcrypt");
 const otpGenerator = require("../utils/generators/otp.generator");
 const emailService = require("../lib/mail.service");
+const jwtService = require("../lib/jwt.service");
 
 module.exports = {
   async REGISTER(req, res) {
@@ -61,7 +64,7 @@ module.exports = {
   async RESEND_OTP(req, res) {
     try {
       let profileData = req.body;
-      await resendOtpValidator.validateAsync(profileData);
+      await resendOtpOrForgotPasswordValidator.validateAsync(profileData);
       let findUser = await UserModel.findOne({ email: profileData.email });
       if (!findUser || findUser.is_verified)
         throw new ClientError("User not found or user already activated", 404);
@@ -72,6 +75,57 @@ module.exports = {
         { otp, otpTime },
       );
       return res.json({ message: "OTP successfully resended" });
+    } catch (err) {
+      return globalError(err, res);
+    }
+  },
+  async FORGOT_PASSWORD(req, res) {
+    try {
+      let profileData = req.body;
+      await resendOtpOrForgotPasswordValidator.validateAsync(profileData);
+      let findUser = await UserModel.findOne({ email: profileData.email });
+      if (!findUser || findUser.is_verified)
+        throw new ClientError("User not found or user already activated", 404);
+      let { otp, otpTime } = otpGenerator();
+      await emailService(profileData.email, otp);
+      await UserModel.findOneAndUpdate(
+        { email: profileData.email },
+        { otp, otpTime },
+      );
+      return res.json({ message: "OTP successfully resended" });
+    } catch (err) {
+      return globalError(err, res);
+    }
+  },
+  async CHANGE_PASSWORD(req, res) {
+    let profileData = req.body;
+    await changePasswordValidator.validateAsync(profileData);
+    let findUser = await UserModel.findOne({ email: profileData.email });
+    if (!findUser || findUser.is_verified)
+      throw new ClientError("User not found or user already activated", 404);
+    let hash_password = await hash(profileData.new_password, 10);
+    await UserModel.findOneAndUpdate(
+      { email: profileData.email },
+      { password: hash_password },
+    );
+    return res.json({ message: "Password successfullt changed", status: 200 });
+  },
+  async LOGIN(req, res) {
+    try {
+      let data = req.body;
+      await loginValidator.validateAsync(data);
+      let findUser = await UserModel.findOne({ email: data.email });
+      if (!findUser || !findUser.is_verified)
+        throw new ClientError("User not found or user already activated", 404);
+      let checkPassword = await compare(data.password, findUser.password);
+      if (!checkPassword)
+        throw new ClientError("Password or email invalid", 400);
+      let accessToken = jwtService.createAccessToken({ sub: findUser.id });
+      return res.json({
+        message: "User successfully logged in",
+        status: 200,
+        accessToken,
+      });
     } catch (err) {
       return globalError(err, res);
     }
